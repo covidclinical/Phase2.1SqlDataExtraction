@@ -1,6 +1,6 @@
 --##############################################################################
---### 4CE Phase 2.0
---### Date: August 20, 2020
+--### 4CE Phase 2.1
+--### Date: September 25, 2020
 --### Database: Microsoft SQL Server
 --### Data Model: i2b2
 --### Created By: Griffin Weber (weber@hms.harvard.edu)
