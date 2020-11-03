@@ -14,6 +14,10 @@
 --!!! This is Oracle version of 4CE Phase 2.0 mssql script
 --!!! This script has SQL blocks and based on settings in covid_config and config2 
 --!!! tables selectively they have to be executed.
+--!!! Changed PatientClinicalCourse SQL.
+--!!! Changed days_since_admission 
+--!!! Added siteid to all the files extracted
+--!!! Fix for the wrong death_date (showing up as a future date) has not been applied in this release
 --!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 --------------------------------------------------------------------------------
 -- General settings
@@ -66,6 +70,7 @@ create table PatientSummary (
 
 alter table PatientSummary add primary key (patient_num);
 
+-- Truncate table PatientSummary ;
 
 insert INTO patientsummary (
         siteid,
@@ -130,26 +135,33 @@ create table PatientClinicalCourse (
 --select * from PatientClinicalCourse ;
 alter table PatientClinicalCourse add primary key (patient_num, days_since_admission);
 
+--  truncate table PatientClinicalCourse  ;
 
 insert into PatientClinicalCourse (siteid, patient_num, days_since_admission, calendar_date, in_hospital, severe, deceased)
-	select distinct '@', p.patient_num, 
-		round(d.d - p.admission_date) days_since_admission,
-		d.d calendar_date,
-		max(case when a.patient_num is not null then 1 else 0 end) in_hospital,
-		max(case when p.severe=1 and d.d>=p.severe_date then 1 else 0 end) severe,
-		max(case when p.deceased=1 and d.d>=p.death_date then 1 else 0 end) deceased
-	from PatientSummary p
-		inner join covid_date_list_temp d    --date_list d
-			on d.d>=p.admission_date and d.d<=p.last_discharge_date
-		left outer join covid_admissions a
-			on a.patient_num=p.patient_num 
-				and a.admission_date>=p.admission_date 
-				and a.admission_date<=d.d 
-				and a.discharge_date>=d.d 
-                group by p.patient_num, p.admission_date, d.d
-                ;
-		
-                commit;
+select siteid,patient_num,days_since_admission, calendar_date,
+case when in_hospital is not null then 1 else 0 end in_hospital,
+severe,
+case when death_date is not null then 1 else 0 end DECEASED
+ from
+	(select '@' siteid, days_since_admission, patient_num,
+		count(*) in_hospital,
+		sum(severe) severe,
+        max(admission_date) admission_date,
+        max(death_date) death_date,
+        max(d) calendar_date
+	from (
+		select distinct trunc(d.d)-trunc(c.admission_date) days_since_admission, d.d,c.admission_date,death_date,
+			c.patient_num, severe
+		from covid_date_list_temp d
+			inner join covid_admissions p
+				on trunc(p.admission_date)<=trunc(d.d) and trunc(p.discharge_date)>=trunc(d.d)
+			inner join covid_cohort c
+				on p.patient_num=c.patient_num and trunc(p.admission_date)>=trunc(c.admission_date)
+	) t
+	group by days_since_admission,patient_num
+) ;
+commit;
+
 
 --------------------------------------------------------------------------------
 -- Patient Observations: Selected Data Facts
@@ -166,11 +178,13 @@ create table PatientObservations (
 
 alter table PatientObservations add primary key (patient_num, concept_type, concept_code, days_since_admission);
 
+-- truncate table PatientObservations ;
+
 -- Diagnoses (3 character ICD9 codes) since 365 days before COVID
 insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
 	select distinct '@',
 		p.patient_num,
-        trunc(cast(f.start_date as date) - p.admission_date),
+        trunc(f.start_date) - trunc(p.admission_date) days_since_admission,
 		'DIAG-ICD9',
         substr(substr(f.concept_cd, length(code_prefix_icd9cm)+1, 999), 1, 3) icd_code_3chars ,
 		-999
@@ -186,7 +200,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
 	select distinct '@',
 		p.patient_num,
-        trunc(cast(f.start_date as date) - p.admission_date),
+        trunc(f.start_date) - trunc(p.admission_date) days_since_admission,
 		'DIAG-ICD10',
         substr(substr(f.concept_cd, length(code_prefix_icd10cm)+1, 999), 1, 3) icd_code_3chars,
 		-999
@@ -195,14 +209,14 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
                 and f.start_date >= (p.admission_date -365)
-    where concept_cd like code_prefix_icd10cm||'%' and code_prefix_icd10cm is not null;
+    where concept_cd like code_prefix_icd10cm||'%' ; --and code_prefix_icd10cm is not null;
     
     commit;
  -- Medications (Med Class) since 365 days before COVID   
  insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
 	select distinct '@',
 		p.patient_num,
-         trunc(cast(f.start_date as date) - p.admission_date),
+         trunc(f.start_date) - trunc(p.admission_date) days_since_admission,
 		'MED-CLASS',
 		m.med_class,	
 		-999
@@ -218,7 +232,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
 	select '@', 
 		f.patient_num,
-         trunc(cast(f.start_date as date) - p.admission_date),
+        trunc(f.start_date) - trunc(p.admission_date) days_since_admission,
 		'LAB-LOINC',		
 		l.loinc,
 		avg(f.nval_num*l.scale_factor)
@@ -232,13 +246,13 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		and f.nval_num >= 0
         and f.start_date >= ( p.admission_date -60)
         and l.scale_factor is not null
-	group by f.patient_num,trunc(cast(f.start_date as date) - p.admission_date) , l.loinc;
+    group by f.patient_num, trunc(f.start_date) - trunc(p.admission_date) , l.loinc;
  commit;   
 -- Procedures (ICD9) each day since COVID (only procedures used in 4CE Phase 1.1 to determine severity)
 insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
 	select distinct '@', 
 		p.patient_num,
-                trunc(cast(f.start_date as date) - p.admission_date),
+        trunc(f.start_date) - trunc(p.admission_date) days_since_admission,        
 		'PROC-ICD9',
         substr(f.concept_cd, length(code_prefix_icd9proc)+1, 999),
 		-999
@@ -259,7 +273,7 @@ commit;
 
 insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
 	select distinct '@', p.patient_num,
-		trunc(cast(f.start_date as date) - p.admission_date)  ,
+        trunc(f.start_date) - trunc(p.admission_date) days_since_admission,
 		'PROC-ICD10',
         substr(f.concept_cd, length(code_prefix_icd10pcs)+1, 999) ,
 		-999
@@ -295,6 +309,8 @@ create table PatientMapping (
 );
 
 alter table PatientMapping add primary key (patient_num, study_num);
+
+-- truncate table PatientMapping ;
 
 set serveroutput on
 declare
@@ -427,14 +443,15 @@ end;
 --To generate data extract files, run listed SQLs
 
 --    File #1: PatientSummary.csv
---spool 'PatientSummary.csv' ;
+--spool 'LocalPatientSummary.csv' ;
 	select s PatientSummaryCSV
 		from (
-			select 0 i, 'patient_num,admission_date,days_since_admission,last_discharge_date,still_in_hospital,'
+			select 0 i, 'siteid,patient_num,admission_date,days_since_admission,last_discharge_date,still_in_hospital,'
 				||'severe_date,severe,death_date,deceased,sex,age_group,race,race_collected' S FROM DUAL
 			union all 	
             select row_number() over (order by admission_date, patient_num) i,
-				cast(patient_num as varchar2(50))
+				siteid
+                ||','||cast(patient_num as varchar2(50))
                 ||','||to_char(admission_date,'YYYY-MM-DD')  --YYYY-MM-DD
                 ||','||to_char(days_since_admission)              
                 ||','||to_char(last_discharge_date,'YYYY-MM-DD')  --YYYY-MM-DD
@@ -457,13 +474,14 @@ end;
 
 
 --    File #2: PatientClinicalCourse.csv
---spool 'PatientClinicalCourse.csv' ;
+--spool 'LocalPatientClinicalCourse.csv' ;
 	select s PatientClinicalCourseCSV
 		from (
-			select 0 i, 'patient_num,days_since_admission,calendar_date,in_hospital,severe,deceased' s FROM DUAL
+			select 0 i, 'siteid,patient_num,days_since_admission,calendar_date,in_hospital,severe,deceased' s FROM DUAL
 			union all 
 			select row_number() over (order by patient_num, days_since_admission) i,
-				cast(patient_num as varchar2(50))
+				siteid
+                ||','||cast(patient_num as varchar2(50))
                 ||','||to_char(days_since_admission) 
                 ||','||to_char(calendar_date,'YYYY-MM-DD')  --YYYY-MM-DD
                 ||','||to_char(in_hospital)
@@ -476,13 +494,14 @@ end;
 --spool off;
 --    File #3: PatientObservations.csv
 
---spool  PatientObservations.csv
+--spool  LocalPatientObservations.csv
 	select s PatientObservationsCSV
 		from (
-			select 0 i, 'patient_num,days_since_admission,concept_type,concept_code,value' s FROM DUAL
+			select 0 i, 'siteid,patient_num,days_since_admission,concept_type,concept_code,value' s FROM DUAL
 			union all 
 			select row_number() over (order by patient_num, concept_type, concept_code, days_since_admission) i,
-            cast(patient_num as varchar2(50))
+            siteid
+                ||','||cast(patient_num as varchar2(50))
                 ||','||to_char(days_since_admission) 
                 ||','||to_char(concept_type)
                 ||','||to_char(concept_code)
@@ -495,13 +514,14 @@ end;
 --spool off;
 
 --    File #4: PatientMapping.csv
---spool PatientMapping.csv;
+--spool LocalPatientMapping.csv;
 	select s PatientMappingCSV
 		from (
-			select 0 i, 'patient_num,study_num' s FROM DUAL
+			select 0 i, 'siteid,patient_num,study_num' s FROM DUAL
 			union all 
 			select row_number() over (order by patient_num) i,
-                to_char(patient_num)
+             siteid
+                ||','||to_char(patient_num)
                 ||','||to_char(study_num)
 			from PatientMapping
 			union all select 9999999, '' FROM DUAL --Add a blank row to make sure the last line in the file with data ends with a line feed.
