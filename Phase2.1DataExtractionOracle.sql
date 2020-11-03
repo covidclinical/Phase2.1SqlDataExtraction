@@ -6,7 +6,6 @@
 --### Created By: Griffin Weber (weber@hms.harvard.edu)
 --### Converted to Oracle By: Jaspreet Khanna (jaspreet.khanna@childrens.harvard.edu)
 --##############################################################################
---*** THIS IS A DRAFT. 4CE SITES ARE NOT BEING ASKED TO RUN THIS SCRIPT YET. ***
 --!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 --!!! Run the 4CE Phase 1.1 script before you run this script.
 --!!! Set all the obfuscation values in the Phase 1.1 #config table to 0.
