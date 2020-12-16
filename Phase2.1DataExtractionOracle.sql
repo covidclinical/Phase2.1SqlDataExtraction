@@ -69,7 +69,7 @@ create table PatientSummary (
 
 alter table PatientSummary add primary key (patient_num);
 
--- Truncate table PatientSummary ;
+
 
 insert INTO patientsummary (
         siteid,
@@ -122,6 +122,17 @@ insert INTO patientsummary (
 -- Patient Clinical Course: Status by Number of Days Since Admission
 --------------------------------------------------------------------------------
 
+
+create table PatientClinicalCourse_temp (
+	siteid varchar2(50) not null,
+	patient_num varchar2(100)  not null,
+	days_since_admission integer  not null,
+	calendar_date date not null,
+	in_hospital integer  not null,
+	severe integer  not null,
+	deceased integer  not null
+);
+
 create table PatientClinicalCourse (
 	siteid varchar2(50) not null,
 	patient_num varchar2(100)  not null,
@@ -131,12 +142,32 @@ create table PatientClinicalCourse (
 	severe integer  not null,
 	deceased integer  not null
 );
+
+Create or replace function get_days_since_admission ( p_patient_num in varchar2 ,p_calendar_date date)
+return number 
+
+as
+v_days_since_admission number :=0 ;
+v_calendar_date date ;
+begin
+
+    select calendar_date into v_calendar_date
+    from patientclinicalcourse_temp
+    where patient_num = p_patient_num  --'250899'
+    and days_since_admission = 0 ;
+
+    select (trunc(p_calendar_date) - trunc(v_calendar_date)) into v_days_since_admission
+    from dual;
+
+    return v_days_since_admission ;
+end;
+/
+
 --select * from PatientClinicalCourse ;
 alter table PatientClinicalCourse add primary key (patient_num, days_since_admission);
 
---  truncate table PatientClinicalCourse  ;
 
-insert into PatientClinicalCourse (siteid, patient_num, days_since_admission, calendar_date, in_hospital, severe, deceased)
+insert into PatientClinicalCourse_temp (siteid, patient_num, days_since_admission, calendar_date, in_hospital, severe, deceased)
 select siteid,patient_num,days_since_admission, calendar_date,
 case when in_hospital is not null then 1 else 0 end in_hospital,
 severe,
@@ -159,7 +190,50 @@ case when death_date is not null then 1 else 0 end DECEASED
 	) t
 	group by days_since_admission,patient_num
 ) ;
+
+
+insert into PatientClinicalCourse (siteid, patient_num, days_since_admission, calendar_date, in_hospital, severe, deceased)
+SELECT
+    siteid,
+    patient_num,
+    days_since_admission,
+    calendar_date,
+    in_hospital,
+    severe,
+    deceased
+FROM patientclinicalcourse_temp
+union all
+SELECT
+    siteid,
+    patient_num,
+    days_since_admission,
+    calendar_date,
+    in_hospital,
+    severe,
+    deceased
+FROM
+        (SELECT
+            d.d calendar_date,
+            '@' siteid,
+            p.patient_num,
+            get_days_since_admission(patient_num,d.d) days_since_admission,
+            0 in_hospital,
+            0 severe,
+            0 deceased
+        FROM
+            covid_date_list_temp d,
+            ( SELECT DISTINCT patient_num
+              FROM patientclinicalcourse_temp
+            ) p
+        WHERE not exists ( SELECT 'x'
+                           FROM PatientClinicalCourse_temp b
+                           WHERE b.patient_num = p.patient_num
+                           AND trunc(d.d) = trunc(b.calendar_date)
+                          )  ) 
+WHERE days_since_admission >= 0 ;
+
 commit;
+
 
 
 --------------------------------------------------------------------------------
@@ -177,7 +251,6 @@ create table PatientObservations (
 
 alter table PatientObservations add primary key (patient_num, concept_type, concept_code, days_since_admission);
 
--- truncate table PatientObservations ;
 
 -- Diagnoses (3 character ICD9 codes) since 365 days before COVID
 insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
@@ -309,7 +382,6 @@ create table PatientMapping (
 
 alter table PatientMapping add primary key (patient_num, study_num);
 
--- truncate table PatientMapping ;
 
 set serveroutput on
 declare
@@ -443,7 +515,7 @@ end;
 
 --    File #1: PatientSummary.csv
 --spool 'LocalPatientSummary.csv' ;
-	select s PatientSummaryCSV
+	select s LocalPatientSummaryCSV
 		from (
 			select 0 i, 'siteid,patient_num,admission_date,days_since_admission,last_discharge_date,still_in_hospital,'
 				||'severe_date,severe,death_date,deceased,sex,age_group,race,race_collected' S FROM DUAL
@@ -474,7 +546,7 @@ end;
 
 --    File #2: PatientClinicalCourse.csv
 --spool 'LocalPatientClinicalCourse.csv' ;
-	select s PatientClinicalCourseCSV
+	select s LocalPatientClinicalCourseCSV
 		from (
 			select 0 i, 'siteid,patient_num,days_since_admission,calendar_date,in_hospital,severe,deceased' s FROM DUAL
 			union all 
@@ -494,7 +566,7 @@ end;
 --    File #3: PatientObservations.csv
 
 --spool  LocalPatientObservations.csv
-	select s PatientObservationsCSV
+	select s LocalPatientObservationsCSV
 		from (
 			select 0 i, 'siteid,patient_num,days_since_admission,concept_type,concept_code,value' s FROM DUAL
 			union all 
@@ -514,7 +586,7 @@ end;
 
 --    File #4: PatientMapping.csv
 --spool LocalPatientMapping.csv;
-	select s PatientMappingCSV
+	select s LocalPatientMappingCSV
 		from (
 			select 0 i, 'siteid,patient_num,study_num' s FROM DUAL
 			union all 
