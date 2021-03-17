@@ -17,6 +17,8 @@
 --!!! Changed days_since_admission 
 --!!! Added siteid to all the files extracted
 --!!! Fix for the wrong death_date (showing up as a future date) has not been applied in this release
+--!!! PatientClinicalCourse load modifications (03/12/2021)
+--!!! Modified load of PatientObservations replaced admission_date with trunc(admission_date) (03/12/2021)
 --!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 --------------------------------------------------------------------------------
 -- General settings
@@ -135,30 +137,26 @@ create table PatientClinicalCourse (
 alter table PatientClinicalCourse add primary key (patient_num, days_since_admission);
 
 --  truncate table PatientClinicalCourse  ;
+--  Modified 03/12/2021
 
-insert into PatientClinicalCourse (siteid, patient_num, days_since_admission, calendar_date, in_hospital, severe, deceased)
-select siteid,patient_num,days_since_admission, calendar_date,
-case when in_hospital is not null then 1 else 0 end in_hospital,
-severe,
-case when death_date is not null then 1 else 0 end DECEASED
- from
-	(select '@' siteid, days_since_admission, patient_num,
-		count(*) in_hospital,
-		sum(severe) severe,
-        max(admission_date) admission_date,
-        max(death_date) death_date,
-        max(d) calendar_date
-	from (
-		select distinct trunc(d.d)-trunc(c.admission_date) days_since_admission, d.d,c.admission_date,death_date,
-			c.patient_num, severe
-		from covid_date_list_temp d
-			inner join covid_admissions p
-				on trunc(p.admission_date)<=trunc(d.d) and trunc(p.discharge_date)>=trunc(d.d)
-			inner join covid_cohort c
-				on p.patient_num=c.patient_num and trunc(p.admission_date)>=trunc(c.admission_date)
-	) t
-	group by days_since_admission,patient_num
-) ;
+
+insert into PatientClinicalCourse (siteid, patient_num, days_since_admission, calendar_date, in_hospital, severe, deceased)  
+    select '@', p.patient_num,
+		trunc(d.d) - trunc(p.admission_date) days_since_admission,
+		trunc(d.d) calendar_date,
+		max(case when a.patient_num is not null then 1 else 0 end) in_hospital,
+		max(case when p.severe=1 and trunc(d.d)>=trunc(p.severe_date) then 1 else 0 end) severe,
+		max(case when p.deceased=1 and trunc(d.d)>=trunc(p.death_date) then 1 else 0 end) deceased
+	from PatientSummary p
+		inner join covid_date_list_temp d
+			on trunc(d.d)>=trunc(p.admission_date)
+		left outer join covid_admissions a
+			on a.patient_num=p.patient_num
+				and trunc(a.admission_date)>=trunc(p.admission_date)
+				and trunc(a.admission_date)<=trunc(d.d)
+				and trunc(a.discharge_date)>=trunc(d.d)
+	group by p.patient_num, trunc(p.admission_date), trunc(d.d) ;
+
 commit;
 
 
@@ -191,7 +189,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		cross join observation_fact f
 		inner join covid_cohort p 
         on f.patient_num=p.patient_num 
-        and f.start_date >= (p.admission_date -365)
+        and f.start_date >= ( trunc(p.admission_date) -365)-- 03/12/2021
     where concept_cd like code_prefix_icd9cm||'%' and  code_prefix_icd9cm is not null;
     commit;
     
@@ -207,7 +205,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		cross join observation_fact f
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
-                and f.start_date >= (p.admission_date -365)
+                and f.start_date >= ( trunc(p.admission_date) -365)-- 03/12/2021
     where concept_cd like code_prefix_icd10cm||'%' ; --and code_prefix_icd10cm is not null;
     
     commit;
@@ -222,7 +220,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 	from observation_fact f
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
-                and f.start_date >= ( p.admission_date -365)
+                and f.start_date >= ( trunc(p.admission_date) -365)-- 03/12/2021
 		inner join covid_med_map m
 			on f.concept_cd = m.local_med_code;
  commit;
@@ -243,7 +241,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 	where l.local_lab_code is not null
 		and f.nval_num is not null
 		and f.nval_num >= 0
-        and f.start_date >= ( p.admission_date -60)
+        and f.start_date >= ( trunc(p.admission_date) -60)-- 03/12/2021
         and l.scale_factor is not null
     group by f.patient_num, trunc(f.start_date) - trunc(p.admission_date) , l.loinc;
  commit;   
@@ -259,7 +257,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		cross join observation_fact f
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
-				and f.start_date >= p.admission_date
+                and f.start_date >= trunc(p.admission_date) -- 03/12/2021
     where concept_cd like code_prefix_icd9proc||'%' and code_prefix_icd9proc is not null
 		and (
 			-- Insertion of endotracheal tube
@@ -280,7 +278,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		cross join observation_fact f
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
-				and f.start_date >= p.admission_date
+                and f.start_date >= trunc(p.admission_date) -- 03/12/2021
 	where concept_cd like code_prefix_icd10pcs||'%'  and code_prefix_icd10pcs is not null
 		and (
 			-- Insertion of endotracheal tube
@@ -289,6 +287,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
             or regexp_like(f.concept_cd , x.code_prefix_icd10pcs||'5A09[345]{1}[A-Z0-9]?') --Converted to ORACLE Regex 
 		) ;
 commit;
+
 
 
 --******************************************************************************
@@ -527,3 +526,5 @@ end;
 		) t
 		order by i;
 --spool off;   
+
+
