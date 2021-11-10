@@ -88,10 +88,10 @@ insert INTO patientsummary (
         race_collected
     )
 	select '@', c.patient_num, c.admission_date, 
-		round(sysdate - c.admission_date) ,
-		(case when trunc(a.last_discharge_date) = trunc(sysdate)  then TO_DATE('01/01/1900','mm/dd/rrrr') 
+		round(TO_DATE('09/10/2021','mm/dd/rrrr') - c.admission_date) ,
+		(case when trunc(a.last_discharge_date) = trunc(TO_DATE('09/10/2021','mm/dd/rrrr'))  then TO_DATE('01/01/1900','mm/dd/rrrr') 
           else a.last_discharge_date end),
-		(case when trunc(a.last_discharge_date) = trunc(sysdate) then 1 else 0 end),
+		(case when trunc(a.last_discharge_date) = trunc(TO_DATE('09/10/2021','mm/dd/rrrr')) then 1 else 0 end),
 		nvl (c.severe_date,TO_DATE('01/01/1900','mm/dd/rrrr')  ),
 		c.severe, 
 		nvl(c.death_date,TO_DATE('01/01/1900','mm/dd/rrrr') ),
@@ -192,6 +192,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		inner join covid_cohort p 
         on f.patient_num=p.patient_num 
         and f.start_date >= (p.admission_date -365)
+		and f.start_date <= TO_DATE('09/10/2021','mm/dd/rrrr')
     where concept_cd like code_prefix_icd9cm||'%' and  code_prefix_icd9cm is not null;
     commit;
     
@@ -208,6 +209,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
                 and f.start_date >= (p.admission_date -365)
+				and f.start_date <= TO_DATE('09/10/2021','mm/dd/rrrr')
     where concept_cd like code_prefix_icd10cm||'%' ; --and code_prefix_icd10cm is not null;
     
     commit;
@@ -222,7 +224,8 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 	from observation_fact f
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
-                and f.start_date >= ( p.admission_date -365)
+                and f.start_date >= (p.admission_date -365)
+				and f.start_date <= TO_DATE('09/10/2021','mm/dd/rrrr')
 		inner join covid_med_map m
 			on f.concept_cd = m.local_med_code;
  commit;
@@ -243,7 +246,8 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 	where l.local_lab_code is not null
 		and f.nval_num is not null
 		and f.nval_num >= 0
-        and f.start_date >= ( p.admission_date -60)
+        and f.start_date >= (p.admission_date -365)
+		and f.start_date <= TO_DATE('09/10/2021','mm/dd/rrrr')
         and l.scale_factor is not null
     group by f.patient_num, trunc(f.start_date) - trunc(p.admission_date) , l.loinc;
  commit;   
@@ -260,6 +264,7 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
 				and f.start_date >= p.admission_date
+				and f.start_date <= TO_DATE('09/10/2021','mm/dd/rrrr')
     where concept_cd like code_prefix_icd9proc||'%' and code_prefix_icd9proc is not null
 		and (
 			-- Insertion of endotracheal tube
@@ -281,12 +286,66 @@ insert into PatientObservations (siteid, patient_num, days_since_admission, conc
 		inner join covid_cohort p 
 			on f.patient_num=p.patient_num 
 				and f.start_date >= p.admission_date
+				and f.start_date <= TO_DATE('09/10/2021','mm/dd/rrrr')
 	where concept_cd like code_prefix_icd10pcs||'%'  and code_prefix_icd10pcs is not null
 		and (
 			-- Insertion of endotracheal tube
 			f.concept_cd = x.code_prefix_icd10pcs||'0BH17EZ'
 			-- Invasive mechanical ventilation
             or regexp_like(f.concept_cd , x.code_prefix_icd10pcs||'5A09[345]{1}[A-Z0-9]?') --Converted to ORACLE Regex 
+		) ;
+commit;
+
+-- Procedures (ICD9) for RRT and Kidney Transplant
+insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
+	select distinct '@', 
+		p.patient_num,
+        trunc(f.start_date) - trunc(p.admission_date) days_since_admission,        
+		'PROC-ICD9',
+        substr(f.concept_cd, length(code_prefix_icd9proc)+1, 999),
+		-999
+ 	from covid_config x
+		cross join observation_fact f
+		inner join covid_cohort p 
+			on f.patient_num=p.patient_num 
+     where concept_cd like code_prefix_icd9proc||'%' and code_prefix_icd9proc is not null
+		and (
+			-- Hemodialysis
+			f.concept_cd = x.code_prefix_icd9proc||'39.95'
+			-- Peritoneal dialysis
+            		or f.concept_cd = x.code_prefix_icd9proc||'54.98' 
+			-- Kidney transplant
+			or f.concept_cd = x.code_prefix_icd9proc||'55.69' 
+		);
+commit;
+
+-- Procedures (ICD10) for RRT and Kidney Transplant
+insert into PatientObservations (siteid, patient_num, days_since_admission, concept_type, concept_code, value)
+	select distinct '@', p.patient_num,
+        trunc(f.start_date) - trunc(p.admission_date) days_since_admission,
+		'PROC-ICD10',
+        substr(f.concept_cd, length(code_prefix_icd10pcs)+1, 999) ,
+		-999
+ 	from covid_config x
+		cross join observation_fact f
+		inner join covid_cohort p 
+			on f.patient_num=p.patient_num 
+	where concept_cd like code_prefix_icd10pcs||'%'  and code_prefix_icd10pcs is not null
+		and (
+			-- Hemodialysis
+			f.concept_cd = x.code_prefix_icd10pcs||'5A1D70Z'
+			or f.concept_cd = x.code_prefix_icd10pcs||'5A1D80Z'
+			or f.concept_cd = x.code_prefix_icd10pcs||'5A1D90Z'
+			-- Peritoneal dialysis
+            		or f.concept_cd = x.code_prefix_icd10pcs||'3E1M39Z' 
+			-- Kidney transplant
+			or f.concept_cd = x.code_prefix_icd10pcs||'0TY00Z0'
+			or f.concept_cd = x.code_prefix_icd10pcs||'0TY00Z1'
+			or f.concept_cd = x.code_prefix_icd10pcs||'0TY00Z2'
+			or f.concept_cd = x.code_prefix_icd10pcs||'0TY10Z0'
+			or f.concept_cd = x.code_prefix_icd10pcs||'0TY10Z1'
+			or f.concept_cd = x.code_prefix_icd10pcs||'0TY10Z2'
+
 		) ;
 commit;
 
