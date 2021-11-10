@@ -1,4 +1,5 @@
 --##############################################################################
+-- original code from https://github.com/covidclinical/Phase2.1AKIRPackage/tree/master/FourCePhase2.1AKI/inst/extdata/phaseX.1_modified_sql/phase2.1
 --### 4CE Phase 2.1
 --### Date: September 25, 2020
 --### Database: Oracle
